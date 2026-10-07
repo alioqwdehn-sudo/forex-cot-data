@@ -1,16 +1,27 @@
-name: Test CFTC Access
+name: Update CFTC Data
 
 on:
   workflow_dispatch:
 
+  schedule:
+    # Saturday 00:30 UTC = 03:30 AM Iraq
+    # Gives CFTC time after the normal Friday release.
+    - cron: "30 0 * * 6"
+
+permissions:
+  contents: write
+
 jobs:
-  test-cftc:
+  update-cftc:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download CFTC TFF Futures Only
         run: |
-          echo "Downloading CFTC data..."
+          echo "Downloading official CFTC TFF data..."
 
           curl -L \
             --fail \
@@ -18,21 +29,109 @@ jobs:
             --connect-timeout 20 \
             --max-time 60 \
             -A "Mozilla/5.0" \
-            -o FinFutWk.txt \
+            -o FinFutWk.tmp \
             "https://www.cftc.gov/dea/newcot/FinFutWk.txt"
 
-          echo "Download successful"
+          echo "Download complete."
           echo "File size:"
-          wc -c FinFutWk.txt
+          wc -c FinFutWk.tmp
 
-          echo "First line:"
-          head -n 1 FinFutWk.txt
-
-      - name: Verify CFTC file
+      - name: Validate CFTC file
         run: |
-          if grep -q "Market_and_Exchange_Names" FinFutWk.txt; then
-            echo "CFTC TFF FILE VERIFIED"
-          else
-            echo "INVALID CFTC FILE"
-            exit 1
+          python3 - <<'PY'
+          import csv
+          import sys
+
+          path = "FinFutWk.tmp"
+
+          expected_markets = {
+              "AUSTRALIAN DOLLAR - CHICAGO MERCANTILE EXCHANGE",
+              "BRITISH POUND - CHICAGO MERCANTILE EXCHANGE",
+              "CANADIAN DOLLAR - CHICAGO MERCANTILE EXCHANGE",
+              "EURO FX - CHICAGO MERCANTILE EXCHANGE",
+              "JAPANESE YEN - CHICAGO MERCANTILE EXCHANGE",
+              "NZ DOLLAR - CHICAGO MERCANTILE EXCHANGE",
+              "SWISS FRANC - CHICAGO MERCANTILE EXCHANGE",
+              "BRAZILIAN REAL - CHICAGO MERCANTILE EXCHANGE",
+              "MEXICAN PESO - CHICAGO MERCANTILE EXCHANGE",
+              "SO AFRICAN RAND - CHICAGO MERCANTILE EXCHANGE",
+          }
+
+          rows = []
+
+          with open(path, "r", encoding="utf-8-sig", newline="") as f:
+              reader = csv.reader(f)
+
+              for row in reader:
+                  if not row:
+                      continue
+
+                  # TFF Futures-Only weekly file should contain 87 fields.
+                  if len(row) != 87:
+                      print(
+                          f"ERROR: Unexpected column count: "
+                          f"{len(row)} instead of 87"
+                      )
+                      sys.exit(1)
+
+                  rows.append(row)
+
+          if not rows:
+              print("ERROR: CFTC file is empty.")
+              sys.exit(1)
+
+          markets = {row[0].strip() for row in rows}
+
+          found = expected_markets & markets
+          missing = expected_markets - markets
+
+          print(f"Total TFF records: {len(rows)}")
+          print(f"Tracked currencies found: {len(found)}/10")
+
+          if missing:
+              print("ERROR: Missing currency markets:")
+              for market in sorted(missing):
+                  print(" -", market)
+              sys.exit(1)
+
+          # Report date is field 3 in the weekly raw file.
+          dates = {row[2].strip() for row in rows if len(row) > 2}
+
+          print("Report date(s):", ", ".join(sorted(dates)))
+
+          if len(dates) != 1:
+              print("ERROR: Expected exactly one weekly report date.")
+              sys.exit(1)
+
+          print("CFTC TFF FILE VERIFIED")
+          PY
+
+      - name: Publish latest CFTC file
+        run: |
+          mv FinFutWk.tmp FinFutWk.txt
+
+      - name: Commit new report if changed
+        run: |
+          git config user.name "CFTC Data Bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add FinFutWk.txt
+
+          if git diff --cached --quiet; then
+            echo "No new CFTC report. Repository already up to date."
+            exit 0
           fi
+
+          REPORT_DATE=$(python3 - <<'PY'
+          import csv
+
+          with open("FinFutWk.txt", "r", encoding="utf-8-sig", newline="") as f:
+              row = next(csv.reader(f))
+              print(row[2].strip())
+          PY
+          )
+
+          git commit -m "Update CFTC TFF data ${REPORT_DATE}"
+          git push
+
+          echo "Published CFTC report: ${REPORT_DATE}"
