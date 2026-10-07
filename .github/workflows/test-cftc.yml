@@ -1,0 +1,38 @@
+name: Test CFTC Access
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-cftc:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download CFTC TFF Futures Only
+        run: |
+          echo "Downloading CFTC data..."
+
+          curl -L \
+            --fail \
+            --show-error \
+            --connect-timeout 20 \
+            --max-time 60 \
+            -A "Mozilla/5.0" \
+            -o FinFutWk.txt \
+            "https://www.cftc.gov/dea/newcot/FinFutWk.txt"
+
+          echo "Download successful"
+          echo "File size:"
+          wc -c FinFutWk.txt
+
+          echo "First line:"
+          head -n 1 FinFutWk.txt
+
+      - name: Verify CFTC file
+        run: |
+          if grep -q "Market_and_Exchange_Names" FinFutWk.txt; then
+            echo "CFTC TFF FILE VERIFIED"
+          else
+            echo "INVALID CFTC FILE"
+            exit 1
+          fi
