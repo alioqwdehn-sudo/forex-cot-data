@@ -1,0 +1,34 @@
+# INACTIVE TEMPLATE. After review replace .github/workflows/test-cftc.yml with this.
+# Do not keep both mirror writers scheduled.
+name: Update CFTC Data
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 21,23 * * 5'
+    - cron: '23 1,7,13,19 * * 6,0,1,2'
+permissions: {}
+concurrency:
+  group: verified-cftc-mirror
+  cancel-in-progress: false
+jobs:
+  update:
+    if: github.repository == 'alioqwdehn-sudo/forex-cot-data' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Fetch fixed official source and strictly validate
+        id: validate
+        run: python3 scripts/update_verified_mirror.py
+      - name: Append only a new complete report with a normal fast-forward push
+        if: steps.validate.outputs.changed == 'true'
+        run: |
+          git config user.name 'Verified CFTC mirror bot'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add -- FinFutWk.txt verification.json
+          git commit -m 'Append newly verified official CFTC TFF Futures-Only report'
+          git push origin HEAD:main
+      - if: failure()
+        run: echo '::error::CFTC mirror failed; previous report preserved. Check publication delays, gaps, corrections and Actions permissions.'
