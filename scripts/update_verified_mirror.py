@@ -21,7 +21,7 @@ MARKETS={
 MAX_BYTES=2*1024*1024
 
 
-def validate(raw,today):
+def validate(raw,today,*,require_fresh=True):
     if not raw or len(raw)>MAX_BYTES: raise ValueError('Empty/oversized report')
     rows=list(csv.reader(io.StringIO(raw.decode('utf-8-sig',errors='strict')),strict=True))
     dates,seen,tracked=set(),set(),[]
@@ -31,7 +31,9 @@ def validate(raw,today):
         if len(row)!=87 or market in seen: raise ValueError('Malformed/duplicate row')
         seen.add(market)
         report=date.fromisoformat(row[2].strip())
-        if report.isoformat()!=row[2].strip() or report.weekday()!=1 or not 3 <= (today-report).days <= 10:
+        if report.isoformat()!=row[2].strip() or report.weekday()!=1 or report>today:
+            raise ValueError('Invalid report date')
+        if require_fresh and not 3 <= (today-report).days <= 10:
             raise ValueError('Invalid or premature report date')
         dates.add(report)
         if market in MARKETS:
@@ -49,7 +51,9 @@ def validate(raw,today):
 def decision(raw,previous,today):
     current,rows=validate(raw,today)
     if not previous: raise ValueError('A verified existing mirror baseline is required')
-    old,oldrows=validate(previous,today)
+    # Accepted history ages during publication delays; validate its contents
+    # without applying the incoming delivery's freshness window.
+    old,oldrows=validate(previous,today,require_fresh=False)
     if current==old:
         if rows!=oldrows: raise ValueError('Correction to existing report requires review')
         return False
